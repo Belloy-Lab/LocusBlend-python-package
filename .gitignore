@@ -1,0 +1,30 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+
+# Local reference data (must live outside the repository)
+*.bed
+*.bim
+*.fam
+*.gtf.gz
+*.bw
+reference/
+references/
+data/
+bin/
+
+# Local editors / OS
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
