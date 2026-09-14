@@ -28,6 +28,7 @@ def test_import_locusblend_without_streamlit():
 
     assert "streamlit" not in sys.modules
     assert locusblend.__version__ == "0.1.0.dev0"
+    assert callable(locusblend.plot)
 
     for name in ("LocusBlendConfig", "LocusBlendResult", "IndexVariant", "ReferenceManager"):
         assert hasattr(locusblend, name), name
@@ -77,4 +78,3 @@ def test_reference_modules_avoid_hard_coded_server_paths():
         text = path.read_text(encoding="utf-8")
         for needle in forbidden:
             assert needle not in text, f"{path.name} contains {needle!r}"
-

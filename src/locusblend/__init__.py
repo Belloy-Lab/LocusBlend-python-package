@@ -2,10 +2,11 @@
 
 This package holds the reusable logic extracted from the single-file baseline
 ``app.2.8.12.py``. Importing :mod:`locusblend` must never import Streamlit: the
-Streamlit application will consume these modules in a later refactoring pass,
-and a standalone Python API will be built on top of them.
+Streamlit application will consume these modules in a later refactoring pass.
 
-Everything here is a work in progress and the public API is not stable yet.
+The public entry point is :func:`locusblend.plot` (internal local 1000G
+reference workflow). Everything here is a work in progress and the public API
+is not stable yet.
 """
 
 from . import (
@@ -23,6 +24,7 @@ from . import (
     variants,
 )
 from .config import LocusBlendConfig
+from .api import plot
 from .models import IndexVariant, LocusBlendResult
 from .reference import ReferenceManager
 
@@ -44,7 +46,7 @@ __all__ = [
     "ld",
     "models",
     "plotting",
+    "plot",
     "reference",
     "variants",
 ]
-

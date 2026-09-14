@@ -203,7 +203,14 @@ def _find_plink_exec(plink_path=None):
     for c in candidates:
         if c and (os.path.exists(c) or shutil.which(c)):
             return c
-    raise FileNotFoundError("PLINK executable not found. Please install plink first.")
+    raise FileNotFoundError(
+        "PLINK executable not found. LocusBlend does not bundle PLINK. "
+        "Install PLINK and either put it on your PATH, set the "
+        f"{PLINK_ENV_VAR} environment variable to its full path, or pass "
+        "plink_path='/full/path/to/plink'. PLINK is required for LD computation "
+        "and for automatic index-variant selection against the internal 1000G "
+        "reference."
+    )
 
 
 def load_reference_bim(bfile_prefix, search_dirs=None):

@@ -31,6 +31,16 @@ MODE_THREE_INDEX = "Three-index LocusBlend"
 LOCUSBLEND_MODES = (MODE_STANDARD, MODE_TWO_INDEX, MODE_THREE_INDEX)
 DEFAULT_MODE = MODE_THREE_INDEX
 
+# Public API mode values -> baseline mode names used everywhere internally.
+PUBLIC_MODE_STANDARD = "standard"
+PUBLIC_MODE_TWO = "two"
+PUBLIC_MODE_THREE = "three"
+PUBLIC_MODE_MAP = {
+    PUBLIC_MODE_STANDARD: MODE_STANDARD,
+    PUBLIC_MODE_TWO: MODE_TWO_INDEX,
+    PUBLIC_MODE_THREE: MODE_THREE_INDEX,
+}
+
 # --------------------------------------------------------------------------
 # LD source options
 # --------------------------------------------------------------------------
@@ -60,6 +70,11 @@ INDEX_SELECTION_METHODS = (
 AUTO_INDEX_SOURCE_TOP = "top"
 AUTO_INDEX_SOURCE_BOTTOM = "bottom"
 
+# Public API auto-index source values.
+AUTO_INDEX_SOURCE_DATASET1 = "dataset1"
+AUTO_INDEX_SOURCE_DATASET2 = "dataset2"
+AUTO_INDEX_SOURCE_VALUES = (AUTO_INDEX_SOURCE_DATASET1, AUTO_INDEX_SOURCE_DATASET2)
+
 # --------------------------------------------------------------------------
 # Gene display modes (genes.load_genes_from_gtf / genes.load_genes_from_table)
 # --------------------------------------------------------------------------
@@ -82,6 +97,44 @@ DEFAULT_CENTER_BP = 73238768
 DEFAULT_WINDOW_KB = 500
 DEFAULT_CLUMP_R2 = 0.01
 DEFAULT_GENE_TRACK_GAP = 30000
+# Internal display defaults of the baseline app's main block (combined locus
+# figure assembly). Not exposed as public API arguments in this pass.
+DEFAULT_COMBINED_HEIGHT = 980
+DEFAULT_VERTICAL_SPACING = 0.04
+DEFAULT_RECOMB_MAX = 100
+DEFAULT_COMPARE_SIZE = 560
+# y-axis recommendation defaults used by the baseline upload-sync path.
+DEFAULT_MIN_YLIM = 7.0
+DEFAULT_YLIM_PAD_FRAC = 0.12
+
+
+def normalize_public_mode(value):
+    """Map a public API mode value to the baseline mode name.
+
+    ``"standard"`` / ``"two"`` / ``"three"`` map exactly to
+    ``"Standard locus zoom"`` / ``"Two-index LocusBlend"`` /
+    ``"Three-index LocusBlend"``. Anything else raises ``ValueError``.
+    """
+    key = str(value or "").strip().lower()
+    if key not in PUBLIC_MODE_MAP:
+        raise ValueError(
+            f"Unsupported mode {value!r}. Use one of: "
+            + ", ".join(repr(k) for k in PUBLIC_MODE_MAP)
+            + "."
+        )
+    return PUBLIC_MODE_MAP[key]
+
+
+def normalize_auto_index_source(value):
+    """Return ``"dataset1"`` or ``"dataset2"``; anything else raises ValueError."""
+    key = str(value or "").strip().lower()
+    if key not in AUTO_INDEX_SOURCE_VALUES:
+        raise ValueError(
+            f"Unsupported auto_index_source {value!r}. Use one of: "
+            + ", ".join(repr(v) for v in AUTO_INDEX_SOURCE_VALUES)
+            + "."
+        )
+    return key
 
 
 def get_required_n_indices(active_mode):
@@ -97,17 +150,25 @@ def get_required_n_indices(active_mode):
 
 
 def parse_highlighted_genes(value):
-    r"""Split a highlighted-gene string into the set of lower-cased names.
+    r"""Split highlighted-gene input into the set of lower-cased names.
 
-    Mirrors the baseline app exactly::
+    Strings use the baseline app's parsing rule exactly::
 
         {g.strip().lower() for g in re.split(r"[,;\s]+", raw) if g.strip()}
 
     which is the form ``genes.add_gene_track_to_subplot`` matches against.
+    Iterables of gene names are accepted as well (each name is stripped and
+    lower-cased); matching stays case-insensitive.
     """
     if value is None:
         return set()
-    return {g.strip().lower() for g in re.split(r"[,;\s]+", str(value)) if g.strip()}
+    if isinstance(value, str):
+        return {g.strip().lower() for g in re.split(r"[,;\s]+", value) if g.strip()}
+    try:
+        items = list(value)
+    except TypeError:
+        items = [value]
+    return {str(g).strip().lower() for g in items if str(g).strip()}
 
 
 @dataclass
@@ -115,8 +176,9 @@ class LocusBlendConfig:
     """Settings for a single LocusBlend run.
 
     Only the settings that the extracted components consume are modelled. The
-    full pipeline (data loading, LD assembly, figure orchestration) is not
-    implemented in this refactoring pass.
+    public API entry point (``locusblend.plot``) fills the internal display
+    defaults from the module constants above instead of exposing every
+    Streamlit control.
     """
 
     mode: str = DEFAULT_MODE

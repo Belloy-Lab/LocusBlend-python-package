@@ -1,10 +1,9 @@
-"""Low-level LocusBlend quickstart.
+"""Low-level LocusBlend quickstart (component level).
 
 This example shows what the refactored package can already do in this first
 pass: point LocusBlend at external reference data, describe a locus run, and
-access the component functions. The high-level ``locusblend.api.plot_locus``
-pipeline is a placeholder until the orchestration pass, so no figure is drawn
-here.
+access the component functions. For the high-level pipeline use
+``locusblend.plot`` instead (see ``examples/python_api.py``).
 
 Run it with::
 
@@ -58,4 +57,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

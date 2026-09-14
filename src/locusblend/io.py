@@ -20,6 +20,7 @@ import hashlib
 import os
 import time
 from io import BytesIO
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -207,6 +208,24 @@ def load_locus_csv_uploaded(file_bytes, file_name):
     print("RAW COLUMNS:", [repr(c) for c in df.columns], flush=True)
     df = _clean_locus_df(df, source_name=file_name)
     log(f"{file_name} loaded, shape={df.shape}")
+    return df
+
+
+def load_locus_path(path):
+    """Load a summary-statistic file from a filesystem path.
+
+    Same parsing and normalization as the uploaded-file path
+    (``read_summary_stats_file`` + ``_clean_locus_df``), but streamed from
+    disk. Unlike the baseline ``load_locus_csv`` helper this accepts every
+    supported format: .csv, .tsv, .txt, .csv.gz, .tsv.gz, .txt.gz.
+    """
+    path = Path(path)
+    log(f"loading summary-statistic file from path: {path}")
+    with open(path, "rb") as file_obj:
+        raw = read_summary_stats_file(file_obj)
+    print("RAW COLUMNS:", [repr(c) for c in raw.columns], flush=True)
+    df = _clean_locus_df(raw, source_name=str(path))
+    log(f"{path} loaded, shape={df.shape}")
     return df
 
 

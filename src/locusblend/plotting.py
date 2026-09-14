@@ -2,7 +2,9 @@
 
 Extracted from ``app.2.8.12.py``: ``get_plotly_locus_py``, tooltip and LD
 reference label helpers, recombination-track reading, the layout-only plot
-theme, and the figure cloning helper.
+theme, the figure cloning helper, and ``build_combined_locus_figure`` (the
+three-row combined locus figure that the baseline assembled inside its
+Streamlit main block).
 
 Plotting behavior is deliberately untouched in this pass: colors, marker size
 logic, LD binning, index-marker colors, missing-reference rendering,
@@ -31,6 +33,7 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
 from .colors import COLOR_MAPPING
+from .genes import add_gene_track_to_subplot
 from .io import chrom_mask, dedup_columns, format_chrom_axis_title, normalize_chrom
 from .reference import (
     INTERNAL_1000G_DEFAULT_ANCESTRY,
@@ -531,3 +534,194 @@ def clone_plotly_figure(fig):
         return go.Figure(fig.to_dict())
     except Exception:
         return copy.deepcopy(fig)
+
+
+def build_combined_locus_figure(
+    fig_top,
+    fig_bottom,
+    genes_df,
+    *,
+    chrom,
+    gene_bp_start,
+    gene_bp_end,
+    title_top="",
+    title_bottom="",
+    gene_display_mode="protein_coding",
+    highlight_names=None,
+    gene_track_gap=30000,
+    combined_height=980,
+    vertical_spacing=0.04,
+    recomb_max=100,
+):
+    """Assemble the three-row combined LocusBlend locus figure.
+
+    Moved from the Streamlit main block of ``app.2.8.12.py`` (the pure plotting
+    orchestration only), preserving the baseline structure exactly:
+
+    * ``rows=3``, ``cols=1``, ``shared_xaxes=True``,
+      ``row_heights=[0.36, 0.36, 0.28]``
+    * row 1 = dataset 1 locus panel, row 2 = dataset 2 locus panel,
+      row 3 = GENCODE gene track
+    * traces are copied from the per-dataset figures and attached to the
+      primary/secondary y axis by the baseline's ``mode == "lines"`` rule
+      (recombination traces are the only line traces)
+    * the primary y ranges come from the per-dataset figures, the secondary
+      (recombination) axes use ``[0, recomb_max]`` with ``dtick=20``
+    * all three x axes share the gene window and ``xaxis2``/``xaxis3`` are
+      matched to ``x``
+    * layout margins, combined height, vertical spacing, subplot titles and the
+      final ``apply_locusblend_plot_theme`` call match the baseline
+
+    Parameters that the baseline read from Streamlit session state are explicit
+    here: ``highlight_names`` (a set/list of gene names, matched
+    case-insensitively by the gene track) and the display constants.
+
+    Returns ``(locus_fig, gene_track_rows)``.
+    """
+    locus_fig = make_subplots(
+        rows=3,
+        cols=1,
+        shared_xaxes=True,
+        vertical_spacing=vertical_spacing,
+        row_heights=[0.36, 0.36, 0.28],
+        specs=[
+            [{"secondary_y": True}],
+            [{"secondary_y": True}],
+            [{"secondary_y": False}],
+        ],
+        subplot_titles=(title_top, title_bottom, f"GENCODE gene track ({gene_display_mode})"),
+    )
+
+    for tr in fig_top.data:
+        tr_json = tr.to_plotly_json()
+        tr_json.pop("xaxis", None)
+        tr_json.pop("yaxis", None)
+        if tr_json.get("type") == "scattergl":
+            tr2 = go.Scattergl(**tr_json)
+        else:
+            tr2 = go.Scatter(**tr_json)
+        is_secondary = getattr(tr, "mode", None) == "lines"
+        locus_fig.add_trace(tr2, row=1, col=1, secondary_y=is_secondary)
+
+    for tr in fig_bottom.data:
+        tr_json = tr.to_plotly_json()
+        tr_json.pop("xaxis", None)
+        tr_json.pop("yaxis", None)
+        if tr_json.get("type") == "scattergl":
+            tr2 = go.Scattergl(**tr_json)
+        else:
+            tr2 = go.Scatter(**tr_json)
+        is_secondary = getattr(tr, "mode", None) == "lines"
+        locus_fig.add_trace(tr2, row=2, col=1, secondary_y=is_secondary)
+
+    if highlight_names is None:
+        highlight_names = set()
+
+    locus_fig, gene_track_rows = add_gene_track_to_subplot(
+        locus_fig,
+        genes_df,
+        row=3,
+        col=1,
+        min_gap=gene_track_gap,
+        highlight_names=highlight_names,
+    )
+
+    locus_fig.update_yaxes(
+        title_text="-log<sub>10</sub>(P)",
+        range=list(fig_top.layout.yaxis.range),
+        zeroline=False,
+        row=1,
+        col=1,
+        secondary_y=False,
+    )
+    locus_fig.update_yaxes(
+        title_text="Recombination rate",
+        range=[0, recomb_max],
+        autorange=False,
+        zeroline=False,
+        showgrid=False,
+        row=1,
+        col=1,
+        secondary_y=True,
+    )
+
+    locus_fig.update_yaxes(
+        title_text="-log<sub>10</sub>(P)",
+        range=list(fig_bottom.layout.yaxis.range),
+        zeroline=False,
+        row=2,
+        col=1,
+        secondary_y=False,
+    )
+    locus_fig.update_yaxes(
+        title_text="Recombination rate",
+        range=[0, recomb_max],
+        autorange=False,
+        zeroline=False,
+        showgrid=False,
+        row=2,
+        col=1,
+        secondary_y=True,
+    )
+
+    locus_fig.update_yaxes(
+        title_text="Genes",
+        range=[-gene_track_rows + 0.5, 0.8],
+        showgrid=False,
+        zeroline=False,
+        showticklabels=False,
+        row=3,
+        col=1,
+    )
+
+    locus_fig.update_xaxes(
+        range=[gene_bp_start / 1e6, gene_bp_end / 1e6],
+        showticklabels=False,
+        zeroline=False,
+        row=1,
+        col=1,
+    )
+    locus_fig.update_xaxes(
+        range=[gene_bp_start / 1e6, gene_bp_end / 1e6],
+        showticklabels=False,
+        zeroline=False,
+        row=2,
+        col=1,
+    )
+    locus_fig.update_xaxes(
+        range=[gene_bp_start / 1e6, gene_bp_end / 1e6],
+        title_text=format_chrom_axis_title(chrom),
+        zeroline=False,
+        row=3,
+        col=1,
+    )
+
+    if hasattr(locus_fig.layout, "xaxis2"):
+        locus_fig.layout.xaxis2.matches = "x"
+    if hasattr(locus_fig.layout, "xaxis3"):
+        locus_fig.layout.xaxis3.matches = "x"
+
+    if hasattr(locus_fig.layout, "yaxis2"):
+        locus_fig.layout.yaxis2.update(
+            range=[0, recomb_max],
+            autorange=False,
+            tickmode="linear",
+            dtick=20,
+        )
+    if hasattr(locus_fig.layout, "yaxis4"):
+        locus_fig.layout.yaxis4.update(
+            range=[0, recomb_max],
+            autorange=False,
+            tickmode="linear",
+            dtick=20,
+        )
+
+    locus_fig.update_layout(
+        height=combined_height,
+        dragmode="zoom",
+        showlegend=False,
+        margin=dict(l=60, r=60, b=45, t=60),
+    )
+    locus_fig = apply_locusblend_plot_theme(locus_fig)
+
+    return locus_fig, gene_track_rows
