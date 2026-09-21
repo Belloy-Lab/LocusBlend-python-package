@@ -127,7 +127,7 @@ def patch_reference_layer(
 
     # the public API resolves its reference manager against this fake tree
     # (``patch_manager=False`` keeps the real resolution so tests can exercise
-    # the managed-default / environment priority)
+    # the reference_dir / environment-variable priority)
     if patch_manager:
         monkeypatch.setattr(
             api,

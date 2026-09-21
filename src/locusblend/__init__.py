@@ -5,10 +5,10 @@ This package holds the reusable logic extracted from the single-file baseline
 Streamlit application will consume these modules in a later refactoring pass.
 
 Public entry points: :func:`locusblend.plot` (internal local 1000G reference
-workflow), :func:`locusblend.install_reference` (explicit reference-data
-installation - never triggered by ``plot()``) and
-:func:`locusblend.reference_status`. Everything here is a work in progress and
-the public API is not stable yet.
+workflow) and :func:`locusblend.reference_status` (inspect a reference directory
+you prepared yourself). Reference data are never bundled or downloaded: point
+the package at them with ``reference_dir=...`` or ``LOCUSBLEND_REFERENCE_DIR``.
+Everything here is a work in progress and the public API is not stable yet.
 """
 
 from . import (
@@ -17,12 +17,9 @@ from . import (
     compare,
     config,
     export,
-    fetch,
     genes,
-    install,
     io,
     ld,
-    manifest,
     models,
     paths,
     plotting,
@@ -31,47 +28,32 @@ from . import (
 )
 from .api import plot
 from .config import LocusBlendConfig
-from .fetch import ChecksumError, DownloadError
-from .install import (
-    InstallResult,
-    ReferenceInstallError,
+from .models import IndexVariant, LocusBlendResult
+from .reference import (
+    ReferenceManager,
     ReferenceStatus,
-    install_reference,
+    ReferenceValidation,
     reference_status,
 )
-from .manifest import ManifestError, ReferenceManifest
-from .models import IndexVariant, LocusBlendResult
-from .paths import get_default_reference_dir
-from .reference import ReferenceManager
 
 __version__ = "0.1.0.dev0"
 
 __all__ = [
-    "ChecksumError",
-    "DownloadError",
     "IndexVariant",
-    "InstallResult",
     "LocusBlendConfig",
     "LocusBlendResult",
-    "ManifestError",
-    "ReferenceInstallError",
     "ReferenceManager",
-    "ReferenceManifest",
     "ReferenceStatus",
+    "ReferenceValidation",
     "__version__",
     "api",
     "colors",
     "compare",
     "config",
     "export",
-    "fetch",
     "genes",
-    "get_default_reference_dir",
-    "install",
-    "install_reference",
     "io",
     "ld",
-    "manifest",
     "models",
     "paths",
     "plot",

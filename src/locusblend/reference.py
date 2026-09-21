@@ -23,8 +23,8 @@ so an existing reference collection only has to be moved, not renamed. The
 templates (and the sub-directory names) are class attributes so the naming
 convention can be adjusted centrally later.
 
-No remote downloading is implemented in this pass: files that are missing are
-reported with the same messages the baseline used.
+Reference data are neither bundled nor downloaded by the package: files that are
+missing are reported with the same messages the baseline used.
 
 ``ReferenceManager`` also provides a cheap preflight:
 ``manager.validate_for_locus(chrom)`` reports missing configuration, missing
@@ -33,10 +33,10 @@ missing recombination BigWig is only a warning (it is optional). Ancestry codes
 are case-insensitive, but an unrecognized code raises ``ValueError`` instead of
 silently running EUR.
 
-Reference directories resolve as: explicit ``reference_dir=...`` ->
-``LOCUSBLEND_REFERENCE_DIR`` -> the managed default cache directory (only when it
-already exists). Nothing here downloads reference data; install it explicitly
-with :func:`locusblend.install_reference`.
+Reference directories are configured explicitly: pass ``reference_dir=...`` or
+set ``LOCUSBLEND_REFERENCE_DIR``. LocusBlend never guesses a location and never
+downloads reference data; use :func:`locusblend.reference_status` (or
+``ReferenceManager.validate_for_locus``) to check a prepared collection.
 """
 
 from __future__ import annotations
@@ -46,7 +46,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, Optional, Tuple
 
-from .io import normalize_chrom
+from .io import get_supported_chromosomes, normalize_chrom
 from .paths import (
     REFERENCE_DIR_ENV_VAR,
     reference_dir_from_env,
@@ -154,11 +154,10 @@ class ReferenceValidation:
         ]
         lines.extend(f"  - {item}" for item in self.errors)
         lines.append(
-            "Reference data live outside the package: pass reference_dir=... or set "
-            f"{REFERENCE_DIR_ENV_VAR}. See the README for the expected directory layout "
-            "(1000g/<ancestry>, gencode, recombination). Managed installs are "
-            "explicit: locusblend.install_reference(ancestry=...); plot() never "
-            "downloads reference data."
+            "Reference data live outside the package and are never downloaded by "
+            "LocusBlend: pass reference_dir=... or set "
+            f"{REFERENCE_DIR_ENV_VAR}. See the README for the expected directory "
+            "layout (1000g/<ancestry>, gencode, recombination)."
         )
         return "\n".join(lines)
 
@@ -243,16 +242,13 @@ class ReferenceManager:
         ancestry=INTERNAL_1000G_DEFAULT_ANCESTRY,
         *,
         strict_ancestry=True,
-        use_managed_default=True,
     ):
         """Create a reference manager.
 
-        Reference directory resolution: explicit ``reference_dir=...`` ->
-        ``LOCUSBLEND_REFERENCE_DIR`` -> the managed default cache directory, and
-        only when that managed directory already exists (a missing managed
-        install therefore keeps failing loudly instead of masking missing
-        reference data). Nothing is downloaded here; use
-        :func:`locusblend.install_reference` explicitly.
+        Reference directory resolution: an explicit ``reference_dir=...``
+        argument, else the ``LOCUSBLEND_REFERENCE_DIR`` environment variable; if
+        neither is set the manager is unconfigured and validation reports it.
+        LocusBlend never guesses a location and never downloads data.
 
         ``ancestry`` is case-insensitive; an unrecognized code raises
         ``ValueError`` (``strict_ancestry=True``, the public default) so typos
@@ -260,11 +256,7 @@ class ReferenceManager:
         baseline helper's silent EUR fallback (used by the module-level
         compatibility wrappers below).
         """
-        location = resolve_reference_dir(
-            reference_dir,
-            use_managed_default=use_managed_default,
-            require_existing_managed=True,
-        )
+        location = resolve_reference_dir(reference_dir)
         self.reference_source = location.source
         self.reference_dir = location.path
         self.ancestry = (
@@ -565,6 +557,215 @@ class ReferenceManager:
             f"recombination: {self.recombination_subdir}",
         ]
         return "\n".join(lines)
+
+
+# ----------------------------------------------------------------------
+# inspection
+# ----------------------------------------------------------------------
+@dataclass(frozen=True)
+class ReferenceStatus:
+    """Structured inspection result for a prepared reference directory.
+
+    A reference directory is *configured* (resolved from ``reference_dir=...``
+    or ``LOCUSBLEND_REFERENCE_DIR``) and the files it should contain are either
+    *present*/*available* or *missing*. Only filesystem existence is checked -
+    reference file contents are never read.
+    """
+
+    reference_dir: Optional[str] = None
+    source: Optional[str] = None
+    exists: bool = False
+    ancestry_chroms: Dict[str, Tuple[str, ...]] = field(default_factory=dict)
+    partial_chroms: Dict[str, Tuple[str, ...]] = field(default_factory=dict)
+    gencode_files: Tuple[str, ...] = ()
+    recombination_files: Tuple[str, ...] = ()
+    notes: Tuple[str, ...] = ()
+    validation: Optional[ReferenceValidation] = None
+
+    @property
+    def available_ancestries(self) -> Tuple[str, ...]:
+        """Ancestries with at least one complete chromosome panel."""
+        return tuple(sorted(self.ancestry_chroms))
+
+    @property
+    def gencode_available(self) -> bool:
+        """True when at least one GENCODE ``*.gtf.gz`` file is present."""
+        return bool(self.gencode_files)
+
+    @property
+    def recombination_available(self) -> bool:
+        """True when a recombination BigWig is present (it is optional)."""
+        return bool(self.recombination_files)
+
+    def is_chrom_available(self, ancestry, chrom) -> bool:
+        """True when every PLINK file for *ancestry*/*chrom* is present."""
+        try:
+            code = resolve_ancestry(ancestry)
+        except ValueError:
+            return False
+        return normalize_chrom(chrom) in self.ancestry_chroms.get(code, ())
+
+    def describe(self) -> str:
+        """Return a short human-readable summary."""
+        lines = [
+            f"reference status: {self.reference_dir} (source: {self.source})",
+            f"  exists: {self.exists}",
+            f"  ancestries available: {', '.join(self.available_ancestries) or 'none'}",
+            f"  GENCODE: {'available' if self.gencode_available else 'missing'}",
+            "  recombination: "
+            + ("available" if self.recombination_available else "not present (optional)"),
+        ]
+        if self.partial_chroms:
+            partial = "; ".join(
+                f"{code}: {', '.join(chroms)}"
+                for code, chroms in sorted(self.partial_chroms.items())
+            )
+            lines.append(f"  partial chromosomes: {partial}")
+        lines.extend(f"  note: {note}" for note in self.notes)
+        return "\n".join(lines)
+
+    def to_dict(self) -> Dict[str, object]:
+        """Return a JSON-friendly view of the reference status."""
+        return {
+            "reference_dir": self.reference_dir,
+            "source": self.source,
+            "exists": self.exists,
+            "available_ancestries": list(self.available_ancestries),
+            "ancestry_chroms": {
+                code: list(chroms) for code, chroms in self.ancestry_chroms.items()
+            },
+            "partial_chroms": {
+                code: list(chroms) for code, chroms in self.partial_chroms.items()
+            },
+            "gencode": {
+                "available": self.gencode_available,
+                "files": list(self.gencode_files),
+            },
+            "recombination": {
+                "available": self.recombination_available,
+                "optional": True,
+                "files": list(self.recombination_files),
+            },
+            "notes": list(self.notes),
+            "validation": self.validation.to_dict() if self.validation is not None else None,
+        }
+
+
+def reference_status(reference_dir=None, ancestry=None, chrom=None) -> ReferenceStatus:
+    """Inspect a prepared reference directory (existence checks only).
+
+    Parameters
+    ----------
+    reference_dir:
+        Directory to inspect; ``None`` uses the ``LOCUSBLEND_REFERENCE_DIR``
+        environment variable. If neither is set, the returned status reports
+        that no reference directory is configured.
+    ancestry:
+        Optional ancestry to validate (raises ``ValueError`` for unknown codes).
+    chrom:
+        Optional chromosome to validate together with *ancestry* (1-22 or X).
+
+    Returns
+    -------
+    ReferenceStatus
+        Structured data (``to_dict()``) plus ``describe()`` for humans.
+    """
+    code = resolve_ancestry(ancestry) if ancestry is not None else None
+    requested_chrom = normalize_chrom(chrom) if chrom is not None else None
+
+    location = resolve_reference_dir(reference_dir)
+    if not location.is_resolved:
+        return ReferenceStatus(
+            reference_dir=None,
+            source=None,
+            exists=False,
+            notes=(
+                "No reference directory configured. " + reference_source_hint(),
+            ),
+        )
+
+    root = Path(location.path)
+    exists = root.is_dir()
+    notes = []
+    ancestry_chroms: Dict[str, Tuple[str, ...]] = {}
+    partial_chroms: Dict[str, Tuple[str, ...]] = {}
+    gencode_files: Tuple[str, ...] = ()
+    recombination_files: Tuple[str, ...] = ()
+    validation: Optional[ReferenceValidation] = None
+
+    if not exists:
+        notes.append(
+            f"reference_dir does not exist yet: {root}. " + reference_source_hint()
+        )
+
+    thousand_dir = root / "1000g"
+    if exists and thousand_dir.is_dir():
+        for child in sorted(thousand_dir.iterdir()):
+            if not child.is_dir():
+                continue
+            try:
+                child_code = resolve_ancestry(child.name)
+            except ValueError:
+                continue
+            manager = ReferenceManager(reference_dir=root, ancestry=child_code)
+            complete = []
+            partial = []
+            for candidate in get_supported_chromosomes():
+                missing = manager.missing_bfile_paths(candidate)
+                if not missing:
+                    complete.append(candidate)
+                elif len(missing) < len(manager.bfile_suffixes):
+                    partial.append(candidate)
+            if complete:
+                ancestry_chroms[child_code] = tuple(complete)
+            if partial:
+                partial_chroms[child_code] = tuple(partial)
+
+    gencode_dir = root / "gencode"
+    if exists and gencode_dir.is_dir():
+        gencode_files = tuple(sorted(p.name for p in gencode_dir.glob("*.gtf.gz")))
+
+    recombination_dir = root / "recombination"
+    if exists and recombination_dir.is_dir():
+        recombination_files = tuple(sorted(p.name for p in recombination_dir.glob("*.bw")))
+
+    if exists and not ancestry_chroms:
+        notes.append(
+            f"no complete 1000G ancestry panel found under {thousand_dir}; expected "
+            "PLINK .bed/.bim/.fam files per chromosome (1-22 and X)."
+        )
+    if exists and not gencode_files:
+        notes.append("no GENCODE annotation (*.gtf.gz) found in the gencode directory.")
+    if exists and not recombination_files:
+        notes.append(
+            "no recombination BigWig (*.bw) present; the recombination overlay is "
+            "optional."
+        )
+
+    if code is not None:
+        if requested_chrom is not None:
+            validation = ReferenceManager(
+                reference_dir=root, ancestry=code
+            ).validate_for_locus(requested_chrom)
+            if not validation.ok:
+                notes.append(
+                    f"chromosome {requested_chrom} is not complete for {code}; "
+                    "see validation."
+                )
+        elif code not in ancestry_chroms:
+            notes.append(f"ancestry {code} has no complete chromosome panel in {root}.")
+
+    return ReferenceStatus(
+        reference_dir=str(root),
+        source=location.source,
+        exists=exists,
+        ancestry_chroms=ancestry_chroms,
+        partial_chroms=partial_chroms,
+        gencode_files=gencode_files,
+        recombination_files=recombination_files,
+        notes=tuple(notes),
+        validation=validation,
+    )
 
 
 # ----------------------------------------------------------------------

@@ -1,9 +1,9 @@
 """LocusBlend public Python API example (internal local 1000G reference).
 
 This is the expected real-world call. Reference data are never part of this
-repository and ``locusblend.plot`` never downloads anything: either prepare a
-reference directory yourself (``reference_dir=...``) or install managed data
-explicitly with ``locusblend.install_reference(...)`` first.
+repository and ``locusblend.plot`` never downloads anything: prepare a reference
+directory yourself and point LocusBlend at it with ``reference_dir=...`` or the
+``LOCUSBLEND_REFERENCE_DIR`` environment variable.
 
 It needs:
 
@@ -31,6 +31,8 @@ Run with::
     python examples/python_api.py
 """
 
+import os
+
 import locusblend
 
 REFERENCE_DIR = r"D:\locusblend_reference"
@@ -55,16 +57,10 @@ def basic_example():
     return result
 
 
-def managed_workflow_example():
-    """Install managed reference data explicitly, then plot without reference_dir.
+def environment_variable_example():
+    """Configure the reference directory through the environment variable."""
+    os.environ["LOCUSBLEND_REFERENCE_DIR"] = REFERENCE_DIR
 
-    There is no default public reference manifest yet, so ``manifest=`` must
-    point at a manifest you obtained (local path, file:// or https:// URL).
-    """
-    locusblend.install_reference(
-        ancestry="EUR",
-        manifest="reference_manifest.json",
-    )
     print(locusblend.reference_status(ancestry="EUR", chrom="14").describe())
 
     return locusblend.plot(
@@ -97,7 +93,7 @@ def manual_and_pinned_locus_example():
 
 if __name__ == "__main__":
     # These helpers require real reference data + PLINK; the calls above are the
-    # documented usage. Uncomment the workflow you want to run.
+    # documented usage. Uncomment the example you want to run.
     basic_example()
-    # managed_workflow_example()
+    # environment_variable_example()
     # manual_and_pinned_locus_example()

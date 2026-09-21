@@ -34,11 +34,9 @@ Uploaded-LD orchestration is intentionally not part of the public API in this
 pass; the uploaded-LD helpers stay available in :mod:`locusblend.ld`.
 
 Reference data (1000G PLINK panels, GENCODE GTF, recombination BigWig) and
-PLINK itself live outside this repository and are never downloaded by the
-package. The reference directory resolves as explicit ``reference_dir=...`` ->
-``LOCUSBLEND_REFERENCE_DIR`` -> the managed default cache directory; managed
-data is installed only by an explicit ``locusblend.install_reference(...)`` call
-and ``plot()`` never downloads anything. The pipeline is GRCh38/hg38 only; no
+PLINK itself live outside this repository: you prepare them and point the
+package at them with ``reference_dir=...`` or ``LOCUSBLEND_REFERENCE_DIR``.
+``plot()`` never downloads anything. The pipeline is GRCh38/hg38 only; no
 liftover is performed.
 """
 
@@ -288,15 +286,12 @@ def plot(
     reference_dir:
         External reference directory holding ``1000g/<ancestry>`` PLINK
         panels, ``gencode`` annotations and the ``recombination`` BigWig.
-        ``None`` (default) resolves like normal use: the
-        ``LOCUSBLEND_REFERENCE_DIR`` environment variable, or the managed
-        default directory (``locusblend.get_default_reference_dir()``) when it
-        already holds data. It is validated up front (exists, ancestry
-        directory, chromosome .bed/.bim/.fam files, GENCODE annotation) so
-        configuration problems fail early with an actionable error instead of
-        deep inside the run. ``plot()`` never downloads reference data: managed
-        data is installed only by an explicit ``locusblend.install_reference``
-        call.
+        ``None`` (default) uses the ``LOCUSBLEND_REFERENCE_DIR`` environment
+        variable; when neither is supplied the call fails with an actionable
+        configuration error. The directory is validated up front (exists,
+        ancestry directory, chromosome .bed/.bim/.fam files, GENCODE
+        annotation) so problems fail early with a clear error instead of deep
+        inside the run. ``plot()`` never downloads reference data.
     ancestry:
         One of ``AFR``, ``AMR``, ``EAS``, ``EUR`` (default), ``SAS``
         (case-insensitive). Any other value raises ``ValueError`` instead of
