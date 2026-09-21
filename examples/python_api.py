@@ -1,6 +1,11 @@
 """LocusBlend public Python API example (internal local 1000G reference).
 
-This is the expected real-world call. It needs:
+This is the expected real-world call. Reference data are never part of this
+repository and ``locusblend.plot`` never downloads anything: either prepare a
+reference directory yourself (``reference_dir=...``) or install managed data
+explicitly with ``locusblend.install_reference(...)`` first.
+
+It needs:
 
 * an external reference directory (never part of this repository)::
 
@@ -50,6 +55,27 @@ def basic_example():
     return result
 
 
+def managed_workflow_example():
+    """Install managed reference data explicitly, then plot without reference_dir.
+
+    There is no default public reference manifest yet, so ``manifest=`` must
+    point at a manifest you obtained (local path, file:// or https:// URL).
+    """
+    locusblend.install_reference(
+        ancestry="EUR",
+        manifest="reference_manifest.json",
+    )
+    print(locusblend.reference_status(ancestry="EUR", chrom="14").describe())
+
+    return locusblend.plot(
+        dataset1="trait1.tsv.gz",
+        dataset2="trait2.tsv.gz",
+        ancestry="EUR",
+        mode="three",
+        output="locusblend.png",
+    )
+
+
 def manual_and_pinned_locus_example():
     """Pin the locus and index variants explicitly (no clumping)."""
     return locusblend.plot(
@@ -70,7 +96,8 @@ def manual_and_pinned_locus_example():
 
 
 if __name__ == "__main__":
-    # Both helpers require real reference data + PLINK; the calls above are the
-    # documented usage. Comment the one you do not want to run.
+    # These helpers require real reference data + PLINK; the calls above are the
+    # documented usage. Uncomment the workflow you want to run.
     basic_example()
+    # managed_workflow_example()
     # manual_and_pinned_locus_example()

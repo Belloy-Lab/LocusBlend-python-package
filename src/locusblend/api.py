@@ -35,7 +35,11 @@ pass; the uploaded-LD helpers stay available in :mod:`locusblend.ld`.
 
 Reference data (1000G PLINK panels, GENCODE GTF, recombination BigWig) and
 PLINK itself live outside this repository and are never downloaded by the
-package. The pipeline is GRCh38/hg38 only; no liftover is performed.
+package. The reference directory resolves as explicit ``reference_dir=...`` ->
+``LOCUSBLEND_REFERENCE_DIR`` -> the managed default cache directory; managed
+data is installed only by an explicit ``locusblend.install_reference(...)`` call
+and ``plot()`` never downloads anything. The pipeline is GRCh38/hg38 only; no
+liftover is performed.
 """
 
 from __future__ import annotations
@@ -255,7 +259,7 @@ def plot(
     dataset1,
     dataset2,
     *,
-    reference_dir,
+    reference_dir=None,
     ancestry=INTERNAL_1000G_DEFAULT_ANCESTRY,
     mode="three",
     chrom=None,
@@ -283,11 +287,16 @@ def plot(
         required (no liftover is performed).
     reference_dir:
         External reference directory holding ``1000g/<ancestry>`` PLINK
-        panels, ``gencode`` annotations and the ``recombination`` BigWig. When
-        ``None``, the ``LOCUSBLEND_REFERENCE_DIR`` environment variable is used.
-        It is validated up front (exists, ancestry directory, chromosome
-        .bed/.bim/.fam files, GENCODE annotation) so configuration problems
-        fail early with an actionable error instead of deep inside the run.
+        panels, ``gencode`` annotations and the ``recombination`` BigWig.
+        ``None`` (default) resolves like normal use: the
+        ``LOCUSBLEND_REFERENCE_DIR`` environment variable, or the managed
+        default directory (``locusblend.get_default_reference_dir()``) when it
+        already holds data. It is validated up front (exists, ancestry
+        directory, chromosome .bed/.bim/.fam files, GENCODE annotation) so
+        configuration problems fail early with an actionable error instead of
+        deep inside the run. ``plot()`` never downloads reference data: managed
+        data is installed only by an explicit ``locusblend.install_reference``
+        call.
     ancestry:
         One of ``AFR``, ``AMR``, ``EAS``, ``EUR`` (default), ``SAS``
         (case-insensitive). Any other value raises ``ValueError`` instead of
@@ -780,6 +789,7 @@ def plot(
         "clump_r2": clump_r2,
         "compare_mode": COMPARE_MODE_SEPARATE,
         "reference_dir": str(ref.reference_dir) if ref.reference_dir is not None else None,
+        "reference_source": ref.reference_source,
         "bfile_prefix": str(ld_bfile_prefix),
         "gtf_path": str(gtf_path),
         "recombination_bw_path": recombination_bw,

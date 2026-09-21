@@ -32,6 +32,11 @@ PLINK chromosome files and a missing GENCODE annotation as errors, while a
 missing recombination BigWig is only a warning (it is optional). Ancestry codes
 are case-insensitive, but an unrecognized code raises ``ValueError`` instead of
 silently running EUR.
+
+Reference directories resolve as: explicit ``reference_dir=...`` ->
+``LOCUSBLEND_REFERENCE_DIR`` -> the managed default cache directory (only when it
+already exists). Nothing here downloads reference data; install it explicitly
+with :func:`locusblend.install_reference`.
 """
 
 from __future__ import annotations
@@ -42,6 +47,12 @@ from pathlib import Path
 from typing import Dict, Optional, Tuple
 
 from .io import normalize_chrom
+from .paths import (
+    REFERENCE_DIR_ENV_VAR,
+    reference_dir_from_env,
+    reference_source_hint,
+    resolve_reference_dir,
+)
 
 # Ancestry codes and labels, verbatim from app.2.8.12.py.
 INTERNAL_1000G_ANCESTRIES = {
@@ -57,8 +68,8 @@ INTERNAL_1000G_ANCESTRY_OPTIONS = list(INTERNAL_1000G_ANCESTRIES.keys())
 # Public API view: the five supported 1000G super-population codes.
 SUPPORTED_ANCESTRIES = tuple(INTERNAL_1000G_ANCESTRY_OPTIONS)
 
-# Environment variables used to locate external data and executables.
-REFERENCE_DIR_ENV_VAR = "LOCUSBLEND_REFERENCE_DIR"
+# Environment variable used to locate the PLINK executable
+# (``REFERENCE_DIR_ENV_VAR`` lives in :mod:`locusblend.paths`).
 PLINK_ENV_VAR = "LOCUSBLEND_PLINK"
 
 
@@ -102,9 +113,11 @@ def resolve_ancestry(value) -> str:
 
 
 def default_reference_dir() -> Optional[Path]:
-    """Return the reference directory from ``LOCUSBLEND_REFERENCE_DIR``, if set."""
-    value = os.environ.get(REFERENCE_DIR_ENV_VAR, "").strip()
-    return Path(value).expanduser() if value else None
+    """Return the reference directory from ``LOCUSBLEND_REFERENCE_DIR``, if set.
+
+    Thin wrapper around :func:`locusblend.paths.reference_dir_from_env`.
+    """
+    return reference_dir_from_env()
 
 
 @dataclass(frozen=True)
@@ -143,7 +156,9 @@ class ReferenceValidation:
         lines.append(
             "Reference data live outside the package: pass reference_dir=... or set "
             f"{REFERENCE_DIR_ENV_VAR}. See the README for the expected directory layout "
-            "(1000g/<ancestry>, gencode, recombination)."
+            "(1000g/<ancestry>, gencode, recombination). Managed installs are "
+            "explicit: locusblend.install_reference(ancestry=...); plot() never "
+            "downloads reference data."
         )
         return "\n".join(lines)
 
@@ -228,8 +243,16 @@ class ReferenceManager:
         ancestry=INTERNAL_1000G_DEFAULT_ANCESTRY,
         *,
         strict_ancestry=True,
+        use_managed_default=True,
     ):
         """Create a reference manager.
+
+        Reference directory resolution: explicit ``reference_dir=...`` ->
+        ``LOCUSBLEND_REFERENCE_DIR`` -> the managed default cache directory, and
+        only when that managed directory already exists (a missing managed
+        install therefore keeps failing loudly instead of masking missing
+        reference data). Nothing is downloaded here; use
+        :func:`locusblend.install_reference` explicitly.
 
         ``ancestry`` is case-insensitive; an unrecognized code raises
         ``ValueError`` (``strict_ancestry=True``, the public default) so typos
@@ -237,11 +260,13 @@ class ReferenceManager:
         baseline helper's silent EUR fallback (used by the module-level
         compatibility wrappers below).
         """
-        if reference_dir is None:
-            reference_dir = default_reference_dir()
-        self.reference_dir = (
-            Path(reference_dir).expanduser() if reference_dir is not None else None
+        location = resolve_reference_dir(
+            reference_dir,
+            use_managed_default=use_managed_default,
+            require_existing_managed=True,
         )
+        self.reference_source = location.source
+        self.reference_dir = location.path
         self.ancestry = (
             resolve_ancestry(ancestry)
             if strict_ancestry
@@ -265,8 +290,7 @@ class ReferenceManager:
     def _require_reference_dir(self) -> Path:
         if self.reference_dir is None:
             raise ValueError(
-                "No reference directory configured. Pass reference_dir=... or set "
-                f"the {REFERENCE_DIR_ENV_VAR} environment variable."
+                "No reference directory configured. " + reference_source_hint()
             )
         return self.reference_dir
 
@@ -392,10 +416,7 @@ class ReferenceManager:
     def _reference_dir_errors(self):
         errors = []
         if self.reference_dir is None:
-            errors.append(
-                "reference_dir is not configured (pass reference_dir=... or set "
-                f"{REFERENCE_DIR_ENV_VAR})."
-            )
+            errors.append("reference_dir is not configured. " + reference_source_hint())
         elif not self.reference_dir.exists():
             errors.append(f"reference_dir does not exist: {self.reference_dir}")
         elif not self.reference_dir.is_dir():
@@ -537,6 +558,7 @@ class ReferenceManager:
         root = str(self.reference_dir) if self.reference_dir is not None else "<unset>"
         lines = [
             f"reference_dir: {root}",
+            f"source: {self.reference_source or '<unresolved>'}",
             f"ancestry: {self.ancestry}",
             f"1000G: {self.ancestry_subdir}/{self.ancestry}",
             f"GENCODE: {self.gencode_subdir}",

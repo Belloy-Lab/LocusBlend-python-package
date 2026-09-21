@@ -101,10 +101,128 @@ The package ships **no** reference data and no bioinformatics binaries:
   or `chr23`; it is normalized to `X` internally, and X allele ids use the same
   `CHR:BP:A1:A2` pattern as autosomes.
 
-## External reference data (never bundled)
+## Reference data: two workflows
 
-Large reference files are not part of this repository and are never committed.
-They live outside it and are resolved centrally by
+Large reference files are never part of the Python package and never bundled in
+this repository. There are two supported ways to provide them: a **managed
+installation** (recommended) or a **manual reference directory** you prepare
+yourself.
+
+Reference directories resolve in this order:
+
+1. an explicit `reference_dir=...` argument
+2. the `LOCUSBLEND_REFERENCE_DIR` environment variable
+3. the managed default cache directory, and only when it already contains data
+
+`locusblend.plot()` **never downloads reference data**: installation is always an
+explicit call.
+
+### Workflow A: managed installation (recommended)
+
+```python
+import locusblend
+
+# During development there is no default public manifest yet, so pass one
+# explicitly (a local JSON path, a file:// URL or an https:// URL).
+locusblend.install_reference(
+    ancestry="EUR",
+    manifest="reference_manifest.json",
+)
+
+result = locusblend.plot(
+    dataset1="trait1.tsv.gz",
+    dataset2="trait2.tsv.gz",
+    ancestry="EUR",
+    mode="three",
+    output="locusblend.png",
+)
+```
+
+* only the requested ancestry (AFR, AMR, EAS, EUR, SAS) is downloaded - never
+  all ancestries at once;
+* shared GENCODE and recombination resources are installed once per reference
+  directory and reused (checksum-skipped) by later ancestry installs;
+* downloads are explicit, SHA256-verified, streamed into a temporary `.part`
+  file and moved into place atomically (an interrupted download never becomes a
+  final file);
+* an existing file whose checksum already matches is skipped; a mismatching
+  file is replaced safely; `force=True` re-downloads;
+* only `https://` sources are accepted (`file://` is accepted for local use);
+  nothing is downloaded automatically;
+* a missing recombination BigWig stays non-fatal (the overlay is simply
+  skipped), while GENCODE and the 1000G PLINK panels are required.
+
+Managed locations (chosen by `platformdirs`, overridable through the standard
+platform cache environment variables):
+
+| Platform | Default managed reference directory |
+| --- | --- |
+| Windows | `%LOCALAPPDATA%\locusblend\Cache\references` |
+| macOS | `~/Library/Caches/locusblend/references` |
+| Linux | `~/.cache/locusblend/references` |
+
+Inspect what is installed (structured data, no file-content scanning):
+
+```python
+status = locusblend.reference_status()                     # resolves like plot()
+status = locusblend.reference_status(ancestry="EUR", chrom="14")
+print(status.describe())
+print(status.installed_ancestries, status.gencode_available)
+print(status.to_dict())                                    # JSON-friendly
+```
+
+#### Reference manifest format
+
+There is **no default public manifest yet** - `install_reference()` without
+`manifest=...` raises a development-stage error rather than pretending a
+distribution exists. A published manifest is JSON (schema version 1); this is
+the field template with placeholders (no real URLs or checksums exist in this
+repository):
+
+```json
+{
+  "schema_version": 1,
+  "bundle_version": "REPLACE_ME (publisher-defined version)",
+  "genome_build": "GRCh38",
+  "files": [
+    {
+      "resource": "1000g",
+      "path": "1000g/EUR/<PLINK bfile name>_ch14.bed",
+      "url": "REPLACE_ME (https:// URL of the published file)",
+      "sha256": "REPLACE_ME (64 hex characters)",
+      "size": 123456,
+      "ancestry": "EUR",
+      "chrom": "14",
+      "component": "bed",
+      "optional": false
+    }
+  ]
+}
+```
+
+| Field | Required | Notes |
+| --- | --- | --- |
+| `schema_version` | yes | must be `1` |
+| `bundle_version` | yes | publisher-defined string |
+| `genome_build` | no | defaults to `GRCh38`; `hg38` is accepted, anything else is rejected (no liftover) |
+| `files[].resource` | yes | `1000g`, `gencode` or `recombination` |
+| `files[].path` | yes | relative destination inside `reference_dir`; absolute paths, drive-qualified paths, UNC paths and any `..` traversal are rejected |
+| `files[].url` | yes | `https://` (or `file://` for local testing) |
+| `files[].sha256` | yes | 64 hex characters; downloads are always verified |
+| `files[].size` | no | verified when given |
+| `files[].ancestry` | for `1000g` | one of AFR/AMR/EAS/EUR/SAS |
+| `files[].chrom` | for `1000g` | 1-22 or X |
+| `files[].component` | no | free-form label (`bed`, `bim`, `fam`, `gtf`, `bw`, ...) |
+| `files[].optional` | no | optional files only warn when they fail |
+
+Successful installs record a lightweight marker inside the reference directory
+(`.locusblend-reference.json`: schema/bundle version, genome build, per-ancestry
+chromosome coverage, shared resource paths - relative paths only).
+
+### Workflow B: manual reference directory
+
+If you prefer to prepare the data yourself, keep it outside the repository and
+point LocusBlend at it. Paths are resolved centrally by
 `locusblend.reference.ReferenceManager`:
 
 ```text
@@ -187,13 +305,22 @@ never downloads or bundles it.
 ```python
 import locusblend
 
+# Workflow A: managed data already installed for this ancestry
+result = locusblend.plot(
+    dataset1="trait1.tsv.gz",
+    dataset2="trait2.tsv.gz",
+    ancestry="EUR",
+    mode="three",
+    output="locusblend.png",
+)
+
+# Workflow B: explicit reference directory
 result = locusblend.plot(
     dataset1="trait1.tsv.gz",
     dataset2="trait2.tsv.gz",
     reference_dir=r"D:\locusblend_reference",
     ancestry="EUR",
     mode="three",
-    output="locusblend.png",
 )
 
 result.locus_figure      # combined three-row locus figure (dataset1 / dataset2 / GENCODE)
@@ -289,6 +416,11 @@ package.
 
 * Publishing to PyPI: the package is installed from a source checkout only
   (development version `0.1.0.dev0`).
+* A default public reference manifest: `install_reference()` requires an
+  explicit `manifest=...` until a bundle is published. No Zenodo DOI, bundle
+  version, URL or checksum is invented anywhere in this repository.
+* A command-line interface: installation and inspection are Python API calls
+  (`install_reference`, `reference_status`) only.
 * Automatic reference-data downloads and Zenodo distribution; reference data
   and PLINK are never bundled.
 * Uploaded-LD orchestration in the public API (the underlying helpers remain in

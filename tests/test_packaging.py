@@ -17,7 +17,7 @@ PACKAGE_DIR = Path(locusblend.__file__).resolve().parent
 GITIGNORE = REPO_ROOT / ".gitignore"
 
 # third-party modules the package imports at module level
-EXPECTED_RUNTIME_DEPENDENCIES = {"numpy", "pandas", "plotly"}
+EXPECTED_RUNTIME_DEPENDENCIES = {"numpy", "pandas", "platformdirs", "plotly"}
 REFERENCE_DATA_SUFFIXES = (".bed", ".bim", ".fam", ".gtf.gz", ".bw")
 
 

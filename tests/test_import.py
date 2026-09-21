@@ -29,6 +29,8 @@ def test_import_locusblend_without_streamlit():
     assert "streamlit" not in sys.modules
     assert locusblend.__version__ == "0.1.0.dev0"
     assert callable(locusblend.plot)
+    assert callable(locusblend.install_reference)
+    assert callable(locusblend.reference_status)
 
     for name in ("LocusBlendConfig", "LocusBlendResult", "IndexVariant", "ReferenceManager"):
         assert hasattr(locusblend, name), name

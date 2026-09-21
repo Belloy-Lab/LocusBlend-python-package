@@ -97,6 +97,7 @@ def patch_reference_layer(
     tmp_path,
     patch_auto_select=True,
     patch_plink=True,
+    patch_manager=True,
     ancestry="EUR",
     chrom="14",
 ):
@@ -125,13 +126,16 @@ def patch_reference_layer(
     calls.gtf_path = str(gtf_path)
 
     # the public API resolves its reference manager against this fake tree
-    monkeypatch.setattr(
-        api,
-        "ReferenceManager",
-        lambda reference_dir=None, ancestry="EUR", **kwargs: ReferenceManager(
-            reference_dir=tmp_path, ancestry=ancestry
-        ),
-    )
+    # (``patch_manager=False`` keeps the real resolution so tests can exercise
+    # the managed-default / environment priority)
+    if patch_manager:
+        monkeypatch.setattr(
+            api,
+            "ReferenceManager",
+            lambda reference_dir=None, ancestry="EUR", **kwargs: ReferenceManager(
+                reference_dir=tmp_path, ancestry=ancestry
+            ),
+        )
 
     def fake_load_reference_bim(bfile_prefix, search_dirs=None):
         calls.load_reference_bim.append(bfile_prefix)

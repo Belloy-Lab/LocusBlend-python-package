@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pytest
 
+from locusblend import paths as locusblend_paths
 from locusblend.reference import (
     INTERNAL_1000G_ANCESTRIES,
     INTERNAL_1000G_DEFAULT_ANCESTRY,
@@ -143,8 +144,11 @@ def test_reference_dir_from_environment(tmp_path, monkeypatch):
     assert default_recombination_bw_path() == str(tmp_path / "recombination" / "recomb1000GAvg.bw")
 
 
-def test_missing_reference_dir_raises_on_path_lookup(monkeypatch):
+def test_missing_reference_dir_raises_on_path_lookup(monkeypatch, tmp_path):
     monkeypatch.delenv("LOCUSBLEND_REFERENCE_DIR", raising=False)
+    monkeypatch.setattr(
+        locusblend_paths, "get_default_reference_dir", lambda: tmp_path / "no_managed"
+    )
 
     ref = ReferenceManager()
     assert ref.has_reference_dir is False
@@ -238,8 +242,11 @@ def test_validate_for_locus_ok_when_everything_is_present(tmp_path):
     assert validation.to_dict()["chromosome"] == "14"
 
 
-def test_validate_unset_reference_dir_is_a_config_error(monkeypatch):
+def test_validate_unset_reference_dir_is_a_config_error(monkeypatch, tmp_path):
     monkeypatch.delenv("LOCUSBLEND_REFERENCE_DIR", raising=False)
+    monkeypatch.setattr(
+        locusblend_paths, "get_default_reference_dir", lambda: tmp_path / "no_managed"
+    )
     ref = ReferenceManager()
 
     validation = ref.validate()
