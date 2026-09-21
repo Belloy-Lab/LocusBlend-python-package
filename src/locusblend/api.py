@@ -89,6 +89,7 @@ from .io import (
     summarize_locus_dataset,
 )
 from .ld import (
+    _find_plink_exec,
     build_ld_annot_for_window,
     compute_ld_maps_with_plink,
     load_reference_bim,
@@ -284,8 +285,13 @@ def plot(
         External reference directory holding ``1000g/<ancestry>`` PLINK
         panels, ``gencode`` annotations and the ``recombination`` BigWig. When
         ``None``, the ``LOCUSBLEND_REFERENCE_DIR`` environment variable is used.
+        It is validated up front (exists, ancestry directory, chromosome
+        .bed/.bim/.fam files, GENCODE annotation) so configuration problems
+        fail early with an actionable error instead of deep inside the run.
     ancestry:
-        One of ``AFR``, ``AMR``, ``EAS``, ``EUR`` (default), ``SAS``.
+        One of ``AFR``, ``AMR``, ``EAS``, ``EUR`` (default), ``SAS``
+        (case-insensitive). Any other value raises ``ValueError`` instead of
+        silently falling back to EUR.
     mode:
         Public mode value: ``"standard"`` (1 index variant), ``"two"`` (2) or
         ``"three"`` (3, default). Mapped internally to the baseline mode names.
@@ -306,7 +312,9 @@ def plot(
         Clumping r^2 threshold (baseline default ``0.01``).
     plink_path:
         Optional explicit PLINK executable path. Resolution order is
-        ``plink_path``, ``LOCUSBLEND_PLINK``, then the system PATH.
+        ``plink_path``, ``LOCUSBLEND_PLINK``, then the system PATH. PLINK is
+        located (never executed) before any dataset or reference work, so a
+        missing executable raises the actionable ``FileNotFoundError`` early.
     title1, title2:
         Dataset titles. Defaults: the file name (without extension) for path
         inputs, ``"Dataset 1"`` / ``"Dataset 2"`` for DataFrame inputs.
@@ -345,6 +353,20 @@ def plot(
     window_bp = int(window_kb * 1000)
     clump_r2 = float(clump_r2)
     warnings = []
+
+    # ------------------------------------------------------------------
+    # 0. environment preflight (cheap checks only, before any dataset I/O)
+    # ------------------------------------------------------------------
+    # ReferenceManager raises a clear ValueError for an unrecognized ancestry.
+    ref = ReferenceManager(reference_dir=reference_dir, ancestry=ancestry)
+    ancestry_code = ref.ancestry
+
+    # reference_dir / ancestry directory / gencode directory
+    ref.validate().raise_for_errors()
+
+    # PLINK is required for LD (and for clumping); locating it only checks the
+    # explicit path, LOCUSBLEND_PLINK and the PATH - it never runs PLINK.
+    plink_exec = _find_plink_exec(plink_path)
 
     # ------------------------------------------------------------------
     # 1. datasets
@@ -402,8 +424,16 @@ def plot(
     # ------------------------------------------------------------------
     # 3. reference wiring (all reference paths come from ReferenceManager)
     # ------------------------------------------------------------------
-    ref = ReferenceManager(reference_dir=reference_dir, ancestry=ancestry)
-    ancestry_code = ref.ancestry
+    # Per-locus validation: PLINK chromosome files + GENCODE are required, the
+    # recombination BigWig is optional (warning only). Only the selected
+    # chromosome is checked.
+    reference_validation = ref.validate_for_locus(selected_chrom)
+    reference_validation.raise_for_errors()
+    # The per-locus validation only warns about the optional recombination
+    # BigWig, so surface that note only when the overlay was requested. The
+    # full validation report is always kept in the result metadata.
+    if show_recombination:
+        warnings.extend(reference_validation.warnings)
 
     ld_bfile_prefix = ref.get_bfile_prefix(selected_chrom)
     gtf_path = ref.get_gtf_path(selected_chrom)
@@ -413,11 +443,6 @@ def plot(
     recombination_bw_arg = (
         recombination_bw if recombination_bw is not None else str(ref.recombination_bw_path())
     )
-    if show_recombination and recombination_bw is None:
-        warnings.append(
-            "Recombination BigWig not found at "
-            f"{recombination_bw_arg}; the recombination overlay is skipped."
-        )
 
     ld_source = LD_SOURCE_INTERNAL_1000G
     ld_labels = get_ld_reference_labels(ld_source, ancestry_code)
@@ -759,6 +784,8 @@ def plot(
         "gtf_path": str(gtf_path),
         "recombination_bw_path": recombination_bw,
         "plink_path": plink_path,
+        "plink_executable": plink_exec,
+        "reference_validation": reference_validation.to_dict(),
         "ld_window_start_bp": ld_bp_start,
         "ld_window_end_bp": ld_bp_end,
         "gene_window_start_bp": gene_bp_start,

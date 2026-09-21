@@ -16,21 +16,24 @@ classifiers = [
     "Topic :: Scientific/Engineering :: Bio-Informatics",
 ]
 
-# Only what the extracted, Streamlit-independent code actually imports.
+# Runtime dependencies: exactly the third-party modules imported at module
+# level by src/locusblend/ (audited with an import scan).
 # Streamlit is deliberately NOT a dependency of this package.
 dependencies = [
-    "numpy",
-    "pandas",
-    "plotly",
+    "numpy>=1.21",
+    "pandas>=1.3",
+    "plotly>=5.0",
 ]
 
 [project.optional-dependencies]
-# Static PNG/PDF export helpers (export.py).
+# Static PNG rendering (plot() output=..., export.py) and the Pillow-based
+# image composition helpers. kaleido>=1 also needs a local Chrome/Chromium.
 export = ["pillow", "kaleido"]
-# Parquet gene tables (genes.py: load_gene_table).
-genes = ["pyarrow"]
-# Recombination-rate BigWig overlay (plotting.py: _read_recomb_track_bw).
+# Parquet gene tables only (genes.py: load_gene_table).
+genes = ["pyarrow>=6.0"]
+# Recombination-rate BigWig overlay only (plotting.py: _read_recomb_track_bw).
 recomb = ["pyBigWig"]
+# Development/test tooling; not required to use the package.
 dev = ["pytest"]
 
 [tool.setuptools]
@@ -42,4 +45,3 @@ where = ["src"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src"]
-

@@ -86,33 +86,58 @@ def make_genes():
 
 # ----------------------------------------------------------------------
 # fake reference / PLINK / gene layer
+#
+# The reference *layout* is real: a small fake reference tree is created at the
+# paths ReferenceManager resolves, so path resolution, ancestry handling and
+# validation all run for real. Only the heavy steps (BIM read, PLINK LD,
+# GENCODE parse, optionally the PLINK lookup and clumping) are replaced.
 # ----------------------------------------------------------------------
-def patch_reference_layer(monkeypatch, tmp_path, patch_auto_select=True):
-    """Patch ReferenceManager lookups and the PLINK/gene steps.
+def patch_reference_layer(
+    monkeypatch,
+    tmp_path,
+    patch_auto_select=True,
+    patch_plink=True,
+    ancestry="EUR",
+    chrom="14",
+):
+    """Patch the heavy pipeline steps; return recorded call information."""
+    calls = SimpleNamespace(
+        compute_ld=[],
+        auto_select=[],
+        genes=[],
+        load_reference_bim=[],
+        reference_dir=tmp_path,
+        ancestry=ancestry,
+        bfile_prefix=None,
+        gtf_path=None,
+    )
 
-    Returns a namespace with the recorded calls so tests can assert on them.
-    """
-    calls = SimpleNamespace(compute_ld=[], auto_select=[], genes=[], bfile_prefix=None)
-
-    prefix = tmp_path / "1000g" / "EUR" / "1000g_EUR_hg38_..._ch14"
+    # real reference layout: 1000g/<ancestry>/, gencode/, recombination/
+    reference = ReferenceManager(reference_dir=tmp_path, ancestry=ancestry)
+    prefix = reference.bfile_prefix(chrom)
     prefix.parent.mkdir(parents=True, exist_ok=True)
     for suffix in (".bed", ".bim", ".fam"):
         Path(str(prefix) + suffix).write_text("", encoding="utf-8")
-    calls.bfile_prefix = str(prefix)
-
-    gtf_path = tmp_path / "gencode" / "gencode.v49.annotation.chr14.gtf.gz"
+    gtf_path = reference.gtf_path(chrom)
     gtf_path.parent.mkdir(parents=True, exist_ok=True)
     gtf_path.write_text("", encoding="utf-8")
-    bw_path = tmp_path / "recombination" / "recomb1000GAvg.bw"
+    calls.bfile_prefix = str(prefix)
+    calls.gtf_path = str(gtf_path)
 
-    monkeypatch.setattr(ReferenceManager, "get_bfile_prefix", lambda self, chrom: str(prefix))
-    monkeypatch.setattr(ReferenceManager, "get_gtf_path", lambda self, chrom: str(gtf_path))
+    # the public API resolves its reference manager against this fake tree
     monkeypatch.setattr(
-        ReferenceManager, "get_recombination_bw_path", lambda self, required=False: None
+        api,
+        "ReferenceManager",
+        lambda reference_dir=None, ancestry="EUR", **kwargs: ReferenceManager(
+            reference_dir=tmp_path, ancestry=ancestry
+        ),
     )
-    monkeypatch.setattr(ReferenceManager, "recombination_bw_path", lambda self: bw_path)
 
-    monkeypatch.setattr(api, "load_reference_bim", lambda bfile_prefix, search_dirs=None: make_bim())
+    def fake_load_reference_bim(bfile_prefix, search_dirs=None):
+        calls.load_reference_bim.append(bfile_prefix)
+        return make_bim()
+
+    monkeypatch.setattr(api, "load_reference_bim", fake_load_reference_bim)
 
     def fake_compute_ld_maps_with_plink(
         bfile_prefix, chrom, start, end, window_snps, idx1_ref, idx2_ref, idx3_ref, plink_path=None
@@ -146,6 +171,9 @@ def patch_reference_layer(monkeypatch, tmp_path, patch_auto_select=True):
         return ld_maps, index_status, ref_snps
 
     monkeypatch.setattr(api, "compute_ld_maps_with_plink", fake_compute_ld_maps_with_plink)
+
+    if patch_plink:
+        monkeypatch.setattr(api, "_find_plink_exec", lambda plink_path=None: "plink-fake")
 
     if patch_auto_select:
 
@@ -657,8 +685,11 @@ def test_result_is_populated(fake_reference):
     assert "Chromosome: chr14" in result.ld_status["caption"]
     assert result.n_window_snps == len(fake_reference.compute_ld[0]["window_snps"])
 
-    assert result.metadata["reference_dir"] == "ignored"
+    assert result.metadata["reference_dir"] == str(fake_reference.reference_dir)
     assert result.metadata["bfile_prefix"] == fake_reference.bfile_prefix
+    assert result.metadata["plink_executable"] == "plink-fake"
+    assert result.metadata["reference_validation"]["ok"] is True
+    assert result.metadata["reference_validation"]["chromosome"] == "14"
     assert result.metadata["config"].gene_display_mode == "protein_coding"
     assert result.metadata["n_genes"] == 2
     assert result.metadata["compare_mode"] == "Three separate compare plots"
@@ -811,8 +842,8 @@ def test_find_plink_exec_missing_binary_is_actionable(monkeypatch):
 
 
 def test_auto_index_without_plink_raises_file_not_found(tmp_path, monkeypatch):
-    """Real clumping dispatch + real PLINK discovery, with no PLINK installed."""
-    patch_reference_layer(monkeypatch, tmp_path, patch_auto_select=False)
+    """PLINK is required: preflight uses real discovery and fails early."""
+    calls = patch_reference_layer(monkeypatch, tmp_path, patch_auto_select=False, patch_plink=False)
     monkeypatch.delenv("LOCUSBLEND_PLINK", raising=False)
     monkeypatch.setattr(shutil, "which", lambda name: None)
 
@@ -827,3 +858,155 @@ def test_auto_index_without_plink_raises_file_not_found(tmp_path, monkeypatch):
         )
 
     assert "PLINK executable not found" in str(excinfo.value)
+    # failed before any expensive work: no BIM read, no LD, no gene parsing
+    assert calls.load_reference_bim == []
+    assert calls.compute_ld == []
+    assert calls.genes == []
+
+
+# ----------------------------------------------------------------------
+# Pass 3: environment preflight
+# ----------------------------------------------------------------------
+def test_plot_rejects_invalid_ancestry_before_loading_datasets(tmp_path, monkeypatch):
+    """Ancestry typos must raise instead of silently using EUR."""
+    monkeypatch.delenv("LOCUSBLEND_REFERENCE_DIR", raising=False)
+
+    with pytest.raises(ValueError) as excinfo:
+        locusblend.plot(
+            "not-a-dataframe-or-path.gz",
+            "also-not-a-dataset.gz",
+            reference_dir=tmp_path,
+            ancestry="ABC",
+        )
+
+    message = str(excinfo.value)
+    assert "Unsupported ancestry 'ABC'" in message
+    assert "EUR" in message
+
+
+def test_plot_accepts_mixed_case_ancestry(fake_reference):
+    result = locusblend.plot(
+        make_dataset("one"),
+        make_dataset("two"),
+        reference_dir="ignored",
+        ancestry="eUr",
+        mode="standard",
+        chrom="14",
+        center_bp=CENTER_BP,
+    )
+    assert result.ancestry == "EUR"
+    assert result.ld_status["ancestry"] == "EUR"
+
+
+def test_plot_missing_reference_dir_fails_early_without_datasets(tmp_path, monkeypatch):
+    monkeypatch.delenv("LOCUSBLEND_REFERENCE_DIR", raising=False)
+
+    with pytest.raises(ValueError) as excinfo:
+        locusblend.plot(
+            123,  # invalid input type: must never be reached
+            456,
+            reference_dir=None,
+        )
+
+    message = str(excinfo.value)
+    assert "reference_dir is not configured" in message
+    assert "LOCUSBLEND_REFERENCE_DIR" in message
+
+
+def test_plot_nonexistent_reference_dir_fails_early(tmp_path, monkeypatch):
+    monkeypatch.delenv("LOCUSBLEND_REFERENCE_DIR", raising=False)
+
+    with pytest.raises(ValueError) as excinfo:
+        locusblend.plot(
+            make_dataset("one"),
+            make_dataset("two"),
+            reference_dir=tmp_path / "does_not_exist",
+        )
+
+    assert "reference_dir does not exist" in str(excinfo.value)
+
+
+def test_plot_missing_chromosome_reference_files_fails_before_ld(fake_reference):
+    Path(fake_reference.bfile_prefix + ".bed").unlink()
+
+    with pytest.raises(FileNotFoundError) as excinfo:
+        locusblend.plot(
+            make_dataset("one"),
+            make_dataset("two"),
+            reference_dir="ignored",
+            mode="standard",
+            chrom="14",
+            center_bp=CENTER_BP,
+        )
+
+    message = str(excinfo.value)
+    assert "PLINK reference files for chromosome 14 are missing" in message
+    assert ".bed" in message
+    # no expensive work happened
+    assert fake_reference.load_reference_bim == []
+    assert fake_reference.compute_ld == []
+    assert fake_reference.genes == []
+
+
+def test_plot_missing_gencode_fails_before_ld(fake_reference):
+    Path(fake_reference.gtf_path).unlink()
+
+    with pytest.raises(FileNotFoundError) as excinfo:
+        locusblend.plot(
+            make_dataset("one"),
+            make_dataset("two"),
+            reference_dir="ignored",
+            mode="standard",
+            chrom="14",
+            center_bp=CENTER_BP,
+        )
+
+    assert "GENCODE annotation for chromosome 14 is missing" in str(excinfo.value)
+    assert fake_reference.load_reference_bim == []
+    assert fake_reference.compute_ld == []
+
+
+def test_plot_missing_ancestry_directory_fails_early(tmp_path, monkeypatch):
+    # fake tree with EUR, but the call asks for SAS
+    patch_reference_layer(monkeypatch, tmp_path, ancestry="EUR")
+
+    with pytest.raises(FileNotFoundError) as excinfo:
+        locusblend.plot(
+            make_dataset("one"),
+            make_dataset("two"),
+            reference_dir="ignored",
+            ancestry="SAS",
+            mode="standard",
+            chrom="14",
+            center_bp=CENTER_BP,
+        )
+
+    assert "SAS reference directory is missing" in str(excinfo.value)
+
+
+def test_plot_missing_recombination_is_not_fatal(fake_reference):
+    result = locusblend.plot(
+        make_dataset("one"),
+        make_dataset("two"),
+        reference_dir="ignored",
+        mode="standard",
+        chrom="14",
+        center_bp=CENTER_BP,
+        show_recombination=True,
+    )
+    assert result.metadata["reference_validation"]["ok"] is True
+    assert result.metadata["reference_validation"]["warnings"]
+    assert any("Recombination BigWig not found" in w for w in result.warnings)
+
+    # not requested -> no warning noise, still no error
+    quiet = locusblend.plot(
+        make_dataset("one"),
+        make_dataset("two"),
+        reference_dir="ignored",
+        mode="standard",
+        chrom="14",
+        center_bp=CENTER_BP,
+        show_recombination=False,
+    )
+    assert quiet.warnings == ()
+    assert quiet.metadata["reference_validation"]["warnings"]

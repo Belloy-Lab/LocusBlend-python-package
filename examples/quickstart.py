@@ -1,9 +1,9 @@
 """Low-level LocusBlend quickstart (component level).
 
-This example shows what the refactored package can already do in this first
-pass: point LocusBlend at external reference data, describe a locus run, and
-access the component functions. For the high-level pipeline use
-``locusblend.plot`` instead (see ``examples/python_api.py``).
+This example points LocusBlend at an external reference directory, validates it
+without reading any data, and describes a locus configuration. For the
+high-level pipeline use ``locusblend.plot`` instead (see
+``examples/python_api.py``).
 
 Run it with::
 
@@ -21,18 +21,16 @@ def main():
     ref = ReferenceManager(reference_dir=REFERENCE_DIR, ancestry="EUR")
     print(ref.describe())
 
-    for chrom in ("14", "X"):
-        try:
-            print(f"chr{chrom} PLINK bfile prefix: {ref.get_bfile_prefix(chrom)}")
-        except FileNotFoundError as exc:
-            # Expected until the external reference collection is in place.
-            print(f"chr{chrom} PLINK bfile prefix unavailable:\n{exc}")
-
-    try:
+    # Cheap preflight: reports missing configuration/files without reading data.
+    report = ref.validate_for_locus("14")
+    print(report.describe())
+    if report.ok:
+        print(f"chr14 PLINK bfile prefix: {ref.get_bfile_prefix('14')}")
         print(f"GENCODE annotation: {ref.get_gtf_path('14')}")
-    except FileNotFoundError as exc:
-        print(f"GENCODE annotation unavailable: {exc}")
+    else:
+        print("Reference data are incomplete; see the errors above.")
 
+    # The recombination BigWig is optional (warning only when missing).
     print(f"Recombination track: {ref.get_recombination_bw_path()}")
 
     config = LocusBlendConfig(

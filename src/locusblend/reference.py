@@ -25,13 +25,21 @@ convention can be adjusted centrally later.
 
 No remote downloading is implemented in this pass: files that are missing are
 reported with the same messages the baseline used.
+
+``ReferenceManager`` also provides a cheap preflight:
+``manager.validate_for_locus(chrom)`` reports missing configuration, missing
+PLINK chromosome files and a missing GENCODE annotation as errors, while a
+missing recombination BigWig is only a warning (it is optional). Ancestry codes
+are case-insensitive, but an unrecognized code raises ``ValueError`` instead of
+silently running EUR.
 """
 
 from __future__ import annotations
 
 import os
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional
+from typing import Dict, Optional, Tuple
 
 from .io import normalize_chrom
 
@@ -45,6 +53,9 @@ INTERNAL_1000G_ANCESTRIES = {
 }
 INTERNAL_1000G_DEFAULT_ANCESTRY = "EUR"
 INTERNAL_1000G_ANCESTRY_OPTIONS = list(INTERNAL_1000G_ANCESTRIES.keys())
+
+# Public API view: the five supported 1000G super-population codes.
+SUPPORTED_ANCESTRIES = tuple(INTERNAL_1000G_ANCESTRY_OPTIONS)
 
 # Environment variables used to locate external data and executables.
 REFERENCE_DIR_ENV_VAR = "LOCUSBLEND_REFERENCE_DIR"
@@ -70,10 +81,108 @@ def format_internal_1000g_ancestry_option(ancestry):
     return f"{ancestry} - {label}"
 
 
+def resolve_ancestry(value) -> str:
+    """Return a supported ancestry code, raising for unrecognized values.
+
+    Case is normalized (``"eur"`` and ``"EUr"`` both give ``"EUR"``), but an
+    unknown code such as ``"ABC"`` raises ``ValueError`` instead of silently
+    falling back to EUR. Used by :class:`ReferenceManager` for public-facing
+    input; the baseline-parity helper
+    :func:`normalize_internal_1000g_ancestry` keeps its silent fallback for
+    internal/app compatibility.
+    """
+    code = str(value or "").strip().upper()
+    if code not in INTERNAL_1000G_ANCESTRIES:
+        raise ValueError(
+            f"Unsupported ancestry {value!r}. Supported ancestries are: "
+            + ", ".join(SUPPORTED_ANCESTRIES)
+            + "."
+        )
+    return code
+
+
 def default_reference_dir() -> Optional[Path]:
     """Return the reference directory from ``LOCUSBLEND_REFERENCE_DIR``, if set."""
     value = os.environ.get(REFERENCE_DIR_ENV_VAR, "").strip()
     return Path(value).expanduser() if value else None
+
+
+@dataclass(frozen=True)
+class ReferenceValidation:
+    """Result of :meth:`ReferenceManager.validate` / ``validate_for_locus``.
+
+    ``config_errors`` are configuration problems (unset or non-existent
+    ``reference_dir``); ``file_errors`` are missing required reference files.
+    Missing optional files (the recombination BigWig) only produce ``warnings``.
+    """
+
+    reference_dir: Optional[str] = None
+    ancestry: Optional[str] = None
+    chrom: Optional[str] = None
+    config_errors: Tuple[str, ...] = ()
+    file_errors: Tuple[str, ...] = ()
+    warnings: Tuple[str, ...] = ()
+    checked_paths: Dict[str, Optional[str]] = field(default_factory=dict)
+
+    @property
+    def ok(self) -> bool:
+        """True when there are no configuration or required-file errors."""
+        return not self.config_errors and not self.file_errors
+
+    @property
+    def errors(self) -> Tuple[str, ...]:
+        """All errors (configuration first)."""
+        return tuple(self.config_errors) + tuple(self.file_errors)
+
+    def _message(self, headline: str) -> str:
+        lines = [
+            f"{headline} (ancestry={self.ancestry!r}, chromosome={self.chrom!r}, "
+            f"reference_dir={self.reference_dir!r}):"
+        ]
+        lines.extend(f"  - {item}" for item in self.errors)
+        lines.append(
+            "Reference data live outside the package: pass reference_dir=... or set "
+            f"{REFERENCE_DIR_ENV_VAR}. See the README for the expected directory layout "
+            "(1000g/<ancestry>, gencode, recombination)."
+        )
+        return "\n".join(lines)
+
+    def raise_for_errors(self) -> None:
+        """Raise the matching error for the recorded problems, if any.
+
+        Configuration problems raise ``ValueError``; missing required reference
+        files raise ``FileNotFoundError`` (matching the individual getters).
+        """
+        if self.config_errors:
+            raise ValueError(self._message("Incomplete LocusBlend reference configuration"))
+        if self.file_errors:
+            raise FileNotFoundError(self._message("Missing LocusBlend reference data"))
+
+    def describe(self) -> str:
+        """Return a short human-readable report (for logging/diagnostics)."""
+        status = "ok" if self.ok else "incomplete"
+        lines = [
+            f"reference validation: {status}",
+            f"  reference_dir: {self.reference_dir}",
+            f"  ancestry: {self.ancestry}",
+            f"  chromosome: {self.chrom}",
+        ]
+        lines.extend(f"  error: {item}" for item in self.errors)
+        lines.extend(f"  warning: {item}" for item in self.warnings)
+        return "\n".join(lines)
+
+    def to_dict(self) -> Dict[str, object]:
+        """Return a JSON-friendly view of the validation result."""
+        return {
+            "ok": self.ok,
+            "reference_dir": self.reference_dir,
+            "ancestry": self.ancestry,
+            "chromosome": self.chrom,
+            "config_errors": list(self.config_errors),
+            "file_errors": list(self.file_errors),
+            "warnings": list(self.warnings),
+            "checked_paths": dict(self.checked_paths),
+        }
 
 
 class ReferenceManager:
@@ -113,13 +222,31 @@ class ReferenceManager:
 
     bfile_suffixes = (".bed", ".bim", ".fam")
 
-    def __init__(self, reference_dir=None, ancestry=INTERNAL_1000G_DEFAULT_ANCESTRY):
+    def __init__(
+        self,
+        reference_dir=None,
+        ancestry=INTERNAL_1000G_DEFAULT_ANCESTRY,
+        *,
+        strict_ancestry=True,
+    ):
+        """Create a reference manager.
+
+        ``ancestry`` is case-insensitive; an unrecognized code raises
+        ``ValueError`` (``strict_ancestry=True``, the public default) so typos
+        cannot silently run EUR. Pass ``strict_ancestry=False`` to keep the
+        baseline helper's silent EUR fallback (used by the module-level
+        compatibility wrappers below).
+        """
         if reference_dir is None:
             reference_dir = default_reference_dir()
         self.reference_dir = (
             Path(reference_dir).expanduser() if reference_dir is not None else None
         )
-        self.ancestry = normalize_internal_1000g_ancestry(ancestry)
+        self.ancestry = (
+            resolve_ancestry(ancestry)
+            if strict_ancestry
+            else normalize_internal_1000g_ancestry(ancestry)
+        )
 
     def __repr__(self) -> str:
         return (
@@ -260,6 +387,149 @@ class ReferenceManager:
         return None
 
     # ------------------------------------------------------------------
+    # validation / preflight
+    # ------------------------------------------------------------------
+    def _reference_dir_errors(self):
+        errors = []
+        if self.reference_dir is None:
+            errors.append(
+                "reference_dir is not configured (pass reference_dir=... or set "
+                f"{REFERENCE_DIR_ENV_VAR})."
+            )
+        elif not self.reference_dir.exists():
+            errors.append(f"reference_dir does not exist: {self.reference_dir}")
+        elif not self.reference_dir.is_dir():
+            errors.append(f"reference_dir is not a directory: {self.reference_dir}")
+        return errors
+
+    def _ancestry_dir_errors(self, checked_paths):
+        errors = []
+        ancestry_dir = self.ancestry_dir
+        checked_paths["ancestry_dir"] = str(ancestry_dir)
+        if not ancestry_dir.is_dir():
+            errors.append(
+                f"1000G {self.ancestry} reference directory is missing: {ancestry_dir} "
+                f"(expected reference_dir/{self.ancestry_subdir}/{self.ancestry})"
+            )
+        return errors
+
+    def _bfile_errors(self, chrom, checked_paths):
+        errors = []
+        prefix = self.bfile_prefix(chrom)
+        checked_paths["bfile_prefix"] = str(prefix)
+        missing = self.missing_bfile_paths(chrom)
+        if missing:
+            errors.append(
+                f"1000G {self.ancestry} PLINK reference files for chromosome {chrom} are "
+                "missing: " + ", ".join(missing)
+            )
+        return errors
+
+    def _gtf_errors(self, chrom, checked_paths):
+        errors = []
+        path = self.gtf_path(chrom)
+        checked_paths["gencode"] = str(path)
+        if path.is_file():
+            return errors
+        if chrom == "X":
+            full_path = self.genome_gtf_path()
+            checked_paths["gencode_genome"] = str(full_path)
+            if full_path.is_file():
+                return errors
+            errors.append(
+                f"GENCODE annotation for chromosome X is missing: {path} or {full_path}"
+            )
+        else:
+            errors.append(f"GENCODE annotation for chromosome {chrom} is missing: {path}")
+        return errors
+
+    def _recombination_warning(self, checked_paths):
+        path = self.recombination_bw_path()
+        checked_paths["recombination"] = str(path)
+        if path.is_file():
+            return None
+        return (
+            f"Recombination BigWig not found at {path}; "
+            "the recombination overlay is skipped."
+        )
+
+    def validate_for_locus(self, chrom, *, require_recombination=False) -> ReferenceValidation:
+        """Validate everything needed to plot one locus on *chrom*.
+
+        Only cheap path checks are performed (no file reads, no scanning of
+        other chromosomes):
+
+        * ``reference_dir`` is configured and exists
+        * the selected ancestry directory exists
+        * the chromosome PLINK .bed/.bim/.fam files exist (required)
+        * the chromosome GENCODE annotation exists (required; chromosome X may
+          fall back to the whole-genome annotation file)
+        * the recombination BigWig exists (OPTIONAL - a missing file only adds
+          a warning unless ``require_recombination=True``)
+        """
+        chrom = normalize_chrom(chrom)
+        config_errors = []
+        file_errors = []
+        warnings = []
+        checked_paths = {}
+
+        config_errors.extend(self._reference_dir_errors())
+        if not config_errors:
+            file_errors.extend(self._ancestry_dir_errors(checked_paths))
+            file_errors.extend(self._bfile_errors(chrom, checked_paths))
+            file_errors.extend(self._gtf_errors(chrom, checked_paths))
+            warning = self._recombination_warning(checked_paths)
+            if warning:
+                (file_errors if require_recombination else warnings).append(warning)
+
+        return ReferenceValidation(
+            reference_dir=None if self.reference_dir is None else str(self.reference_dir),
+            ancestry=self.ancestry,
+            chrom=chrom,
+            config_errors=tuple(config_errors),
+            file_errors=tuple(file_errors),
+            warnings=tuple(warnings),
+            checked_paths=checked_paths,
+        )
+
+    def validate(self, chrom=None, *, require_recombination=False) -> ReferenceValidation:
+        """Validate the reference layout (see :meth:`validate_for_locus`).
+
+        Without *chrom* only the chromosome-independent parts are checked
+        (``reference_dir``, the ancestry directory and the ``gencode``
+        directory), which is useful as an early preflight before the locus is
+        known. The recombination BigWig is always optional.
+        """
+        if chrom is not None and str(chrom).strip() != "":
+            return self.validate_for_locus(chrom, require_recombination=require_recombination)
+
+        config_errors = []
+        file_errors = []
+        warnings = []
+        checked_paths = {}
+
+        config_errors.extend(self._reference_dir_errors())
+        if not config_errors:
+            file_errors.extend(self._ancestry_dir_errors(checked_paths))
+            gencode_dir = self.gencode_dir
+            checked_paths["gencode_dir"] = str(gencode_dir)
+            if not gencode_dir.is_dir():
+                file_errors.append(f"GENCODE directory is missing: {gencode_dir}")
+            warning = self._recombination_warning(checked_paths)
+            if warning:
+                (file_errors if require_recombination else warnings).append(warning)
+
+        return ReferenceValidation(
+            reference_dir=None if self.reference_dir is None else str(self.reference_dir),
+            ancestry=self.ancestry,
+            chrom=None,
+            config_errors=tuple(config_errors),
+            file_errors=tuple(file_errors),
+            warnings=tuple(warnings),
+            checked_paths=checked_paths,
+        )
+
+    # ------------------------------------------------------------------
     # diagnostics
     # ------------------------------------------------------------------
     def describe(self) -> str:
@@ -286,9 +556,12 @@ def get_internal_1000g_prefix(
     """Return the chromosome-specific 1000G bfile prefix (no existence check).
 
     Baseline name/signature preserved; ``reference_dir`` is new and falls back
-    to ``LOCUSBLEND_REFERENCE_DIR``.
+    to ``LOCUSBLEND_REFERENCE_DIR``. Keeps the baseline's silent EUR fallback
+    for unrecognized ancestries (``strict_ancestry=False``).
     """
-    return ReferenceManager(reference_dir=reference_dir, ancestry=ancestry).bfile_prefix(chrom)
+    return ReferenceManager(
+        reference_dir=reference_dir, ancestry=ancestry, strict_ancestry=False
+    ).bfile_prefix(chrom)
 
 
 def get_internal_bfile_prefix_for_chrom(
@@ -296,13 +569,18 @@ def get_internal_bfile_prefix_for_chrom(
     ancestry=INTERNAL_1000G_DEFAULT_ANCESTRY,
     reference_dir=None,
 ):
-    """Return the 1000G bfile prefix for *chrom*, verifying .bed/.bim/.fam."""
-    return ReferenceManager(reference_dir=reference_dir, ancestry=ancestry).get_bfile_prefix(chrom)
+    """Return the 1000G bfile prefix for *chrom*, verifying .bed/.bim/.fam.
+
+    Keeps the baseline's silent EUR fallback for unrecognized ancestries.
+    """
+    return ReferenceManager(
+        reference_dir=reference_dir, ancestry=ancestry, strict_ancestry=False
+    ).get_bfile_prefix(chrom)
 
 
 def get_gtf_path_for_chrom(chrom, reference_dir=None):
     """Return the GENCODE GTF for *chrom*, verifying it exists."""
-    return ReferenceManager(reference_dir=reference_dir).get_gtf_path(chrom)
+    return ReferenceManager(reference_dir=reference_dir, strict_ancestry=False).get_gtf_path(chrom)
 
 
 def default_recombination_bw_path() -> Optional[str]:
@@ -315,4 +593,3 @@ def default_recombination_bw_path() -> Optional[str]:
         return ReferenceManager().get_recombination_bw_path()
     except ValueError:
         return None
-

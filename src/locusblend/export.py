@@ -13,6 +13,11 @@ App coupling removed: ``draw_export_header`` / ``build_locusblend_export_image``
 used to read the legend images from the app's ``assets/`` directory next to the
 script. The directory is now an explicit ``asset_dir`` parameter (default
 ``None`` = no legend images).
+
+Static PNG rendering is optional: install ``pip install "locusblend[export]"``
+(Pillow + kaleido). ``kaleido>=1`` additionally needs a local Chrome/Chromium;
+``kaleido<1`` bundled its own browser. Missing export dependencies raise a
+``RuntimeError`` that names the extra and keeps the original error visible.
 """
 
 from __future__ import annotations
@@ -42,6 +47,9 @@ __all__ = [
 # Legend images used by the publication-page header (baseline asset names).
 LEGEND_ASSET_NAMES = ("legend_overlay.png", "Drawing3.png")
 
+# Optional-extra hint used by every "export dependency missing" error.
+EXPORT_EXTRA_HINT = 'pip install "locusblend[export]"'
+
 # --- extracted from app.2.8.12.py (verbatim) ---
 
 
@@ -55,10 +63,28 @@ def _load_pillow():
     try:
         from PIL import Image, ImageDraw, ImageFont
     except ImportError as e:
-        raise RuntimeError(
-            "Pillow is required to compose PNG/PDF exports. Install it with: pip install pillow"
-        ) from e
+        raise _missing_pillow_error(e) from e
     return Image, ImageDraw, ImageFont
+
+
+def _missing_pillow_error(exc):
+    """Build the RuntimeError for a missing (optional) Pillow dependency."""
+    return RuntimeError(
+        "Pillow is required to compose PNG/PDF exports. Install the optional export "
+        f"dependencies with: {EXPORT_EXTRA_HINT} "
+        f"(original error: {exc})"
+    )
+
+
+def _static_export_error(exc):
+    """Build the RuntimeError for a failed Plotly static image export."""
+    return RuntimeError(
+        "Static export failed. Plotly image export requires the optional 'export' "
+        f"dependencies (kaleido, pillow): {EXPORT_EXTRA_HINT}. "
+        "Kaleido 1.x also requires a local Chrome/Chromium installation, while "
+        "kaleido <1 bundled its own browser; nothing is downloaded or installed "
+        f"automatically. (original error: {exc})"
+    )
 
 
 def _get_resample_filter():
@@ -197,10 +223,7 @@ def render_plotly_figure_to_png_bytes(fig, width_px, height_px, scale=1):
             scale=scale,
         )
     except Exception as e:
-        raise RuntimeError(
-            "Static export failed. Plotly image export requires kaleido. "
-            "Depending on the installed kaleido version, Chrome may also be required on the server."
-        ) from e
+        raise _static_export_error(e) from e
 
 
 def open_pil_image_from_bytes(data):

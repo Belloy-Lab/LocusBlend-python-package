@@ -17,7 +17,12 @@ and auto-index selection all follow `app.2.8.12.py`.
 | --- | --- | --- |
 | 1 | Extract Streamlit-free modules (io, reference, variants, ld, genes, plotting, compare, export, config, models) | done |
 | 2 | Standalone pipeline + public `locusblend.plot` for the internal local 1000G reference | done |
+| 3 | Packaging, dependency, validation and documentation pass | done |
 | later | Streamlit app rewritten on top of the package; uploaded-LD workflow in the public API; publication-page export | not started |
+
+The **Streamlit web app has not yet been migrated** to this package: it still
+runs from the single-file baseline, while the package is used through the Python
+API below.
 
 ## Immutable baseline
 
@@ -35,16 +40,44 @@ cd locusblend_package
 python -m pip install -e .
 ```
 
-Optional extras:
+The Python API and the figures themselves work with just the core dependencies
+(`numpy`, `pandas`, `plotly`). Optional extras:
 
 ```bash
-python -m pip install -e ".[export]"   # pillow + kaleido for PNG/PDF rendering
+python -m pip install -e ".[export]"   # Pillow + kaleido: needed for output="figure.png"
 python -m pip install -e ".[genes]"    # pyarrow, only for parquet gene tables
 python -m pip install -e ".[recomb]"   # pyBigWig, only for the recombination BigWig
 python -m pip install -e ".[dev]"      # pytest
 ```
 
 Streamlit is deliberately **not** a dependency of the package.
+
+### Static PNG export (kaleido)
+
+`locusblend.plot(..., output="figure.png")` renders the combined locus figure
+through Plotly's static image export, which needs the `export` extra:
+
+```bash
+python -m pip install -e ".[export]"
+```
+
+* `kaleido>=1` also requires a local Chrome/Chromium installation.
+* `kaleido<1` bundled its own browser.
+* Nothing is downloaded or installed automatically, and export errors are never
+  swallowed: a missing dependency raises a `RuntimeError` naming this extra and
+  including the original error.
+
+## Required external components
+
+The package ships **no** reference data and no bioinformatics binaries:
+
+| Component | Required? | Notes |
+| --- | --- | --- |
+| GRCh38/hg38 summary statistics | yes | input files; no liftover is performed |
+| PLINK | yes | LD calculation + automatic index selection; not bundled |
+| 1000 Genomes PLINK reference (`1000g/<ancestry>`) | yes | `.bed`/`.bim`/`.fam` per chromosome |
+| GENCODE annotation (`gencode/`) | yes | gene track |
+| recombination BigWig (`recombination/`) | no | optional overlay; a missing file only warns |
 
 ## Input requirements
 
@@ -91,7 +124,17 @@ The file names inside those directories follow the baseline app's naming
 `gencode.v49.annotation.chr<chrom>.gtf.gz`,
 `gencode.v49.annotation.gtf.gz`, `recomb1000GAvg.bw`); the naming templates are
 class attributes of `ReferenceManager` so they can be adjusted in one place.
-`LOCUSBLEND_REFERENCE_DIR` supplies the default reference directory.
+
+Point the package at that directory either explicitly or through the
+environment:
+
+```python
+ReferenceManager(reference_dir=r"D:\locusblend_reference")   # explicit
+
+import os
+os.environ["LOCUSBLEND_REFERENCE_DIR"] = r"D:\locusblend_reference"
+ReferenceManager()                                            # from the env var
+```
 
 ```python
 from locusblend import ReferenceManager
@@ -101,6 +144,29 @@ bfile_prefix = ref.get_bfile_prefix("14")      # verifies .bed/.bim/.fam
 gtf_path = ref.get_gtf_path("14")              # chrX falls back to the genome GTF
 bw_path = ref.get_recombination_bw_path()      # None when the file is missing
 ```
+
+### Validation / preflight
+
+`ReferenceManager` can check a reference collection without reading any data
+(cheap path checks only, and only for the chromosome you ask about):
+
+```python
+report = ref.validate_for_locus("14")   # or ref.validate() before the locus is known
+print(report.ok, report.errors, report.warnings)
+print(report.describe())
+report.raise_for_errors()               # ValueError for configuration, FileNotFoundError for data
+```
+
+* required: `reference_dir` (exists), the selected ancestry directory, the
+  chromosome `.bed`/`.bim`/`.fam` files, the GENCODE annotation;
+* optional: the recombination BigWig - a missing file is only a warning;
+* `locusblend.plot()` runs these checks up front, so missing configuration
+  fails immediately with an actionable message instead of a cryptic error deep
+  in the pipeline. The full report is kept in `result.metadata["reference_validation"]`.
+
+Ancestry codes are case-insensitive (`"eur"`, `"EUr"` → `EUR`), but an
+unrecognized code such as `"ABC"` raises `ValueError` instead of silently
+running EUR.
 
 ## PLINK requirement
 
@@ -112,7 +178,9 @@ against the internal 1000G reference. It is **not bundled**. Resolution order:
 3. the system `PATH` (the executable must be named `plink`)
 
 If PLINK cannot be found, the API raises a `FileNotFoundError` that names these
-options.
+options. PLINK is only *located* during the preflight (an existence/`PATH`
+check); it is never executed just to validate the installation, and the package
+never downloads or bundles it.
 
 ## Python API
 
@@ -143,7 +211,9 @@ reference-matches both datasets (two-pass forward / allele-flip matching),
 computes LD with PLINK inside the locus window, builds both locus panels plus
 the GENCODE gene track, assembles the same three-row combined figure and the
 locus compare figure as `app.2.8.12.py`, and optionally writes the combined
-locus figure to a PNG.
+locus figure to a PNG. Before any of that work it validates the ancestry,
+`reference_dir` layout and PLINK availability, so incomplete environments fail
+early and clearly.
 
 ### Modes
 
@@ -188,10 +258,10 @@ result = locusblend.plot(
 
 `output=None` (default) writes nothing. `output="locusblend.png"` writes the
 main combined locus figure (parent directories are created). Static rendering
-uses Plotly's kaleido; if it is unavailable the existing clear
-`RuntimeError` mentioning kaleido/Chrome is raised and no partial file is
-written. The full 8.5 x 11 publication-page composition is not part of this
-pass.
+needs the optional `export` extra (`pip install -e ".[export]"`, see above); if
+it is missing, a `RuntimeError` naming the extra and the kaleido/Chrome
+requirement is raised and no partial file is written. The full 8.5 x 11
+publication-page composition is not part of this pass.
 
 ## Package layout
 
@@ -217,10 +287,13 @@ package.
 
 ## Not implemented yet
 
+* Publishing to PyPI: the package is installed from a source checkout only
+  (development version `0.1.0.dev0`).
+* Automatic reference-data downloads and Zenodo distribution; reference data
+  and PLINK are never bundled.
 * Uploaded-LD orchestration in the public API (the underlying helpers remain in
   `locusblend.ld` for a later pass).
 * The 8.5 x 11 publication-page export.
-* Remote reference downloading, Zenodo logic, bundled reference data or PLINK.
 * A compare-mode argument (the API uses the baseline default, three separate
   compare panels) and re-exposing Streamlit-only display controls.
 * Rewriting the Streamlit application to use this package.

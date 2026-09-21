@@ -12,6 +12,8 @@ This is the expected real-world call. It needs:
 
 * PLINK available on the system PATH, via the ``LOCUSBLEND_PLINK`` environment
   variable, or via ``plink_path=...`` (PLINK is not bundled);
+* the optional export extra for ``output="..."`` (``pip install -e ".[export]"``
+  - Pillow + kaleido; kaleido>=1 additionally needs Chrome/Chromium);
 * GRCh38/hg38 summary statistics with at least CHR, BP, P, A1, A2
   (rsid, BETA, SE, A1FREQ, N are recommended). Files may be .csv, .tsv, .txt
   or their .gz variants. No liftover is performed.
@@ -72,4 +74,3 @@ if __name__ == "__main__":
     # documented usage. Comment the one you do not want to run.
     basic_example()
     # manual_and_pinned_locus_example()
-
