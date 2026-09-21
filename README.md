@@ -173,8 +173,12 @@ complete or partial, whether GENCODE is available, whether the optional
 recombination BigWig is present, and (when asked) validation of one
 ancestry/chromosome pair.
 
-A reproducible reference-preparation guide and helper scripts will be added in a
-later pass; no official download locations are documented or invented here.
+The verified reference-preparation workflow - including the historical
+1000 Genomes source, its citation and the exact PLINK2 command - is documented in
+[docs/reference_preparation.md](docs/reference_preparation.md);
+[scripts/prepare_1000g_reference.sh](scripts/prepare_1000g_reference.sh) runs that
+workflow and writes files using the exact names `ReferenceManager` expects.
+LocusBlend provides no download links.
 
 ### Reference layout details
 
@@ -375,9 +379,9 @@ package.
 
 * Publishing to PyPI: the package is installed from a source checkout only
   (development version `0.1.0.dev0`).
-* A reference-preparation guide and helper scripts: the reproducible recipe for
-  obtaining and arranging the reference files will be added in a later pass. No
-  official download locations or preparation commands are documented here.
+* Reference-data acquisition: LocusBlend documents the preparation workflow
+  ([docs/reference_preparation.md](docs/reference_preparation.md)) but never
+  downloads, hosts or redistributes reference data.
 * A command-line interface: reference inspection is the Python API
   (`reference_status`) only.
 * Automatic reference-data downloads: reference data and PLINK are never
